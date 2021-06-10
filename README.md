@@ -1,109 +1,42 @@
-Fast int64 -> int64 hash in golang.
+Package intintmap is forked from https://github.com/brentp/intintmap/.
+It implements a fast int64 key -> int64 value map.
 
-[![GoDoc](https://godoc.org/github.com/brentp/intintmap?status.svg)](https://godoc.org/github.com/brentp/intintmap)
-[![Go Report Card](https://goreportcard.com/badge/github.com/brentp/intintmap)](https://goreportcard.com/report/github.com/brentp/intintmap)
+Related articles:
 
-# intintmap
+1. [Implementing a world fastest Java int-to-int hash map](http://java-performance.info/implementing-world-fastest-java-int-to-int-hash-map/)
+1. [Fibonacci Hashing: The Optimization that the World Forgot (or: a Better Alternative to Integer Modulo)](https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/)
 
-    import "github.com/brentp/intintmap"
+It is 2-8X faster than the builtin map, benchmark:
 
-Package intintmap is a fast int64 key -> int64 value map.
+```text
+cpu: Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
 
-It is copied nearly verbatim from
-http://java-performance.info/implementing-world-fastest-java-int-to-int-hash-map/ .
+BenchmarkIntIntMapFill-12                                     12          95630852 ns/op
+BenchmarkStdMapFill-12                                         5         248595736 ns/op
+BenchmarkIntIntMapGet10PercentHitRate-12                   11953             96504 ns/op
+BenchmarkStdMapGet10PercentHitRate-12                      10083            107622 ns/op
+BenchmarkIntIntMapGet100PercentHitRate-12                    870           1305507 ns/op
+BenchmarkStdMapGet100PercentHitRate-12                       104          10678794 ns/op
+BenchmarkIntIntMapGet_Size_1024_FillFactor_60-12       479573955                 2.189 ns/op
+BenchmarkStdMapGet_Size_1024-12                         77867008                16.36 ns/op
 
-It interleaves keys and values in the same underlying array to improve locality.
-
-It is 2-5X faster than the builtin map:
-```
-BenchmarkIntIntMapFill                 	      10	 158436598 ns/op
-BenchmarkStdMapFill                    	       5	 312135474 ns/op
-BenchmarkIntIntMapGet10PercentHitRate  	    5000	    243108 ns/op
-BenchmarkStdMapGet10PercentHitRate     	    5000	    268927 ns/op
-BenchmarkIntIntMapGet100PercentHitRate 	     500	   2249349 ns/op
-BenchmarkStdMapGet100PercentHitRate    	     100	  10258929 ns/op
-```
-
-## Usage
-
-```go
-m := intintmap.New(32768, 0.6)
-m.Put(int64(1234), int64(-222))
-m.Put(int64(123), int64(33))
-
-v, ok := m.Get(int64(222))
-v, ok := m.Get(int64(333))
-
-m.Del(int64(222))
-m.Del(int64(333))
-
-fmt.Println(m.Size())
-
-for k := range m.Keys() {
-    fmt.Printf("key: %d\n", k)
-}
-
-for kv := range m.Items() {
-    fmt.Printf("key: %d, value: %d\n", kv[0], kv[1])
-}
+cpu: Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
+BenchmarkConcurrentStdMapGet_NoLock-12                  72221664                15.79 ns/op
+BenchmarkConcurrentStdMapGet_RWMutex-12                  3255450               369.01 ns/op
+BenchmarkConcurrentSyncMapGet-12                        27300724                44.59 ns/op
+BenchmarkConcurrentCOWMapGet-12                        344179628                 3.487 ns/op
+BenchmarkConcurrentSliceIndex-12                       908571164                 1.213 ns/op
 ```
 
-#### type Map
+Some notes:
 
-```go
-type Map struct {
-}
+```shell
+# check inline cost information
+go build -gcflags=-m=2 ./
+
+# check bounds check elimination information
+go build -gcflags="-d=ssa/check_bce/debug=1" ./
+
+# check assembly output
+go tool compile -S ./intintmap.go
 ```
-
-Map is a map-like data-structure for int64s
-
-#### func  New
-
-```go
-func New(size int, fillFactor float64) *Map
-```
-New returns a map initialized with n spaces and uses the stated fillFactor. The
-map will grow as needed.
-
-#### func (*Map) Get
-
-```go
-func (m *Map) Get(key int64) (int64, bool)
-```
-Get returns the value if the key is found.
-
-#### func (*Map) Put
-
-```go
-func (m *Map) Put(key int64, val int64)
-```
-Put adds or updates key with value val.
-
-#### func (*Map) Del
-
-```go
-func (m *Map) Del(key int64)
-```
-Del deletes a key and its value.
-
-#### func (*Map) Keys
-
-```go
-func (m *Map) Keys() chan int64
-```
-Keys returns a channel for iterating all keys.
-
-#### func (*Map) Items
-
-```go
-func (m *Map) Items() chan [2]int64
-```
-Items returns a channel for iterating all key-value pairs.
-
-
-#### func (*Map) Size
-
-```go
-func (m *Map) Size() int
-```
-Size returns size of the map.

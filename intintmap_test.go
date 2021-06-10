@@ -1,6 +1,7 @@
-package intintmap
+package intmap
 
 import (
+	"math/rand"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func TestMapSimple(t *testing.T) {
 	// Put() and Get()
 
 	for i = 0; i < 20000; i += 2 {
-		m.Put(i, i)
+		m.Set(i, i)
 	}
 	for i = 0; i < 20000; i += 2 {
 		if v, ok = m.Get(i); !ok || v != i {
@@ -38,7 +39,7 @@ func TestMapSimple(t *testing.T) {
 	}
 	n := len(m0)
 
-	for k := range m.Keys() {
+	for _, k := range m.Keys() {
 		m0[k] = -k
 	}
 	if n != len(m0) {
@@ -60,9 +61,9 @@ func TestMapSimple(t *testing.T) {
 	}
 	n = len(m0)
 
-	for kv := range m.Items() {
-		m0[kv[0]] = -kv[1]
-		if kv[0] != kv[1] {
+	for _, kv := range m.Items() {
+		m0[kv.K] = -kv.V
+		if kv.K != kv.V {
 			t.Errorf("didn't get expected key-value pair")
 		}
 	}
@@ -79,14 +80,31 @@ func TestMapSimple(t *testing.T) {
 	// --------------------------------------------------------------------
 	// Del()
 
-	for i = 0; i < 20000; i += 2 {
-		m.Del(i)
+	for i = 0; i < 10000; i += 2 {
+		m.Delete(i)
 	}
-	for i = 0; i < 20000; i += 2 {
+	for i = 0; i < 10000; i += 2 {
 		if _, ok = m.Get(i); ok {
 			t.Errorf("didn't get expected 'not found' flag")
 		}
 		if _, ok = m.Get(i + 1); ok {
+			t.Errorf("didn't get expected 'not found' flag")
+		}
+	}
+	for i = 10000; i < 20000; i += 2 {
+		if v, ok = m.Get(i); !ok || v != i {
+			t.Errorf("didn't get expected value")
+		}
+		if _, ok = m.Get(i + 1); ok {
+			t.Errorf("didn't get expected 'not found' flag")
+		}
+	}
+
+	for i = 10000; i < 20000; i += 2 {
+		m.Delete(i)
+	}
+	for i = 10000; i < 20000; i += 2 {
+		if _, ok = m.Get(i); ok {
 			t.Errorf("didn't get expected 'not found' flag")
 		}
 	}
@@ -95,7 +113,7 @@ func TestMapSimple(t *testing.T) {
 	// Put() and Get()
 
 	for i = 0; i < 20000; i += 2 {
-		m.Put(i, i*2)
+		m.Set(i, i*2)
 	}
 	for i = 0; i < 20000; i += 2 {
 		if v, ok = m.Get(i); !ok || v != i*2 {
@@ -108,6 +126,25 @@ func TestMapSimple(t *testing.T) {
 
 }
 
+func TestDeleteFreeKey(t *testing.T) {
+	m := New(10, 0.6)
+
+	m.Delete(0)
+	if m.Size() != 0 {
+		t.Errorf("size (%d) is not right, should be %d", m.Size(), 0)
+	}
+
+	m.Set(0, 1)
+	if v, ok := m.Get(0); !ok || v != 1 {
+		t.Errorf("didn't get exprected value")
+	}
+
+	m.Delete(0)
+	if m.Size() != 0 {
+		t.Errorf("size (%d) is not right, should be %d", m.Size(), 0)
+	}
+}
+
 func TestMap(t *testing.T) {
 	m := New(10, 0.6)
 	var ok bool
@@ -116,10 +153,10 @@ func TestMap(t *testing.T) {
 	step := int64(61)
 
 	var i int64
-	m.Put(0, 12345)
+	m.Set(0, 12345)
 	for i = 1; i < 100000000; i += step {
-		m.Put(i, i+7)
-		m.Put(-i, i-7)
+		m.Set(i, i+7)
+		m.Set(-i, i-7)
 
 		if v, ok = m.Get(i); !ok || v != i+7 {
 			t.Errorf("expected %d as value for key %d, got %d", i+7, i, v)
@@ -154,9 +191,9 @@ const STEP = 9534
 func fillIntIntMap(m *Map) {
 	var j int64
 	for j = 0; j < MAX; j += STEP {
-		m.Put(j, -j)
+		m.Set(j, -j)
 		for k := j; k < j+16; k++ {
-			m.Put(k, -k)
+			m.Set(k, -k)
 		}
 
 	}
@@ -251,5 +288,39 @@ func BenchmarkStdMapGet100PercentHitRate(b *testing.B) {
 			}
 		}
 		//log.Println("map sum:", sum)
+	}
+}
+
+var randIntegers = func() []int64 {
+	out := make([]int64, 1024)
+	for i := range out {
+		out[i] = rand.Int63()
+	}
+	return out
+}()
+
+func BenchmarkIntIntMapGet_Size_1024_FillFactor_60(b *testing.B) {
+	m := New(1024, 0.6)
+	for _, x := range randIntegers {
+		m.Set(x, -x)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		k := randIntegers[i&1023]
+		_, _ = m.Get(k)
+	}
+}
+
+func BenchmarkStdMapGet_Size_1024(b *testing.B) {
+	m := make(map[int64]int64, 1024)
+	for _, x := range randIntegers {
+		m[x] = -x
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		k := randIntegers[i&1023]
+		_ = m[k]
 	}
 }

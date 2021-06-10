@@ -1,42 +1,22 @@
-// Package intintmap is a fast int64 key -> int64 value map.
-//
-// It is copied nearly verbatim from http://java-performance.info/implementing-world-fastest-java-int-to-int-hash-map/
-package intintmap
+package intmap
 
 import (
 	"math"
+	"unsafe"
 )
 
-// INT_PHI is for scrambling the keys
+// INT_PHI is for scrambling the keys.
 const INT_PHI = 0x9E3779B9
 
-// FREE_KEY is the 'free' key
+// FREE_KEY is the 'free' key.
 const FREE_KEY = 0
 
-func phiMix(x int64) int64 {
+func phiMix(x int64) uint64 {
 	h := x * INT_PHI
-	return h ^ (h >> 16)
+	return uint64(h ^ (h >> 16))
 }
 
-// Map is a map-like data-structure for int64s
-type Map struct {
-	data       []int64 // interleaved keys and values
-	fillFactor float64
-	threshold  int // we will resize a map once it reaches this size
-	size       int
-
-	mask  int64 // mask to calculate the original position
-	mask2 int64
-
-	hasFreeKey bool  // do we have 'free' key in the map?
-	freeVal    int64 // value of 'free' key
-}
-
-func nextPowerOf2(x uint32) uint32 {
-	if x == math.MaxUint32 {
-		return x
-	}
-
+func nextPowerOfTwo(x int) int {
 	if x == 0 {
 		return 1
 	}
@@ -52,34 +32,83 @@ func nextPowerOf2(x uint32) uint32 {
 }
 
 func arraySize(exp int, fill float64) int {
-	s := nextPowerOf2(uint32(math.Ceil(float64(exp) / fill)))
+	s := int(math.Ceil(float64(exp) / fill))
+	s = nextPowerOfTwo(s)
 	if s < 2 {
 		s = 2
 	}
-	return int(s)
+	return s
 }
 
-// New returns a map initialized with n spaces and uses the stated fillFactor.
-// The map will grow as needed.
+func calcThreshold(capacity int, fillFactor float64) int {
+	return int(math.Floor(float64(capacity) * fillFactor))
+}
+
+// Map is a hash map data structure optimized for int64 key values.
+// Map should be created by calling New, using uninitialized zero Map
+// will cause panic.
+//
+// Map is not safe to use concurrently, for a concurrently safe map,
+// you may check the COWMap and TypeMap.
+type Map struct {
+	data    []Entry
+	dataptr unsafe.Pointer // &data[0], helps to eliminate slice bounds checking
+
+	fillFactor float64
+	threshold  int    // we will resize a map once it reaches this threshold
+	size       int    // the map's size
+	mask       uint64 // capacity - 1
+
+	hasFreeKey bool
+	freeVal    int64
+}
+
+// Entry represents a key value pair in a Map.
+type Entry struct {
+	K, V int64
+}
+
+// New returns a map initialized with the stated size and fill factor.
+// The Map will grow as needed.
 func New(size int, fillFactor float64) *Map {
 	if fillFactor <= 0 || fillFactor >= 1 {
-		panic("FillFactor must be in (0, 1)")
+		panic("fill factor must be in (0, 1)")
 	}
 	if size <= 0 {
-		panic("Size must be positive")
+		panic("size must be positive")
 	}
 
 	capacity := arraySize(size, fillFactor)
+	threshold := calcThreshold(capacity, fillFactor)
+	data := make([]Entry, capacity)
 	return &Map{
-		data:       make([]int64, 2*capacity),
+		data:       data,
+		dataptr:    unsafe.Pointer(&data[0]),
 		fillFactor: fillFactor,
-		threshold:  int(math.Floor(float64(capacity) * fillFactor)),
-		mask:       int64(capacity - 1),
-		mask2:      int64(2*capacity - 1),
+		threshold:  threshold,
+		mask:       uint64(capacity - 1),
 	}
 }
 
+// Size returns size of the map.
+func (m *Map) Size() int {
+	return m.size
+}
+
+// getK uses pointer arithmetic to eliminate slice bounds checking,
+// it will be inlined into the callers.
+func (m *Map) getK(ptr uint64) *int64 {
+	return (*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr*16)))
+}
+
+// getV uses pointer arithmetic to eliminate slice bounds checking,
+// it will be inlined into the callers.
+func (m *Map) getV(ptr uint64) *int64 {
+	return (*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr*16) + 8))
+}
+
 // Get returns the value if the key is found.
+// It will be inlined into the callers
 func (m *Map) Get(key int64) (int64, bool) {
 	if key == FREE_KEY {
 		if m.hasFreeKey {
@@ -88,130 +117,162 @@ func (m *Map) Get(key int64) (int64, bool) {
 		return 0, false
 	}
 
-	ptr := (phiMix(key) & m.mask) << 1
-	if ptr < 0 || ptr >= int64(len(m.data)) { // Check to help to compiler to eliminate a bounds check below.
-		return 0, false
-	}
-	k := m.data[ptr]
-
-	if k == FREE_KEY { // end of chain already
-		return 0, false
-	}
-	if k == key { // we check FREE prior to this call
-		return m.data[ptr+1], true
-	}
+	// manually inline phiMix to help inlining
+	h := uint64(key) * INT_PHI
+	ptr := h ^ (h >> 16)
 
 	for {
-		ptr = (ptr + 2) & m.mask2
-		k = m.data[ptr]
+		ptr &= m.mask
+		// manually inline getK and getV to help inlining
+		k := *(*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr*16)))
+		if k == key {
+			return *(*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr*16) + 8)), true
+		}
 		if k == FREE_KEY {
 			return 0, false
 		}
-		if k == key {
-			return m.data[ptr+1], true
-		}
+		ptr += 1
 	}
 }
 
-// Put adds or updates key with value val.
-func (m *Map) Put(key int64, val int64) {
+// Has tells whether a key is found in the map.
+// It will be inlined into the callers.
+func (m *Map) Has(key int64) bool {
+	if key == FREE_KEY {
+		return m.hasFreeKey
+	}
+
+	// manually inline phiMix to help inlining
+	h := uint64(key) * INT_PHI
+	ptr := h ^ (h >> 16)
+
+	for {
+		ptr &= m.mask
+		// manually inline getK to help inlining
+		k := *(*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr*16)))
+		if k == FREE_KEY {
+			return true
+		}
+		if k == key {
+			return true
+		}
+		ptr += 1
+	}
+}
+
+// Set adds or updates key with value to the map.
+func (m *Map) Set(key, val int64) {
 	if key == FREE_KEY {
 		if !m.hasFreeKey {
+			m.hasFreeKey = true
 			m.size++
 		}
-		m.hasFreeKey = true
 		m.freeVal = val
 		return
 	}
 
-	ptr := (phiMix(key) & m.mask) << 1
-	k := m.data[ptr]
-
-	if k == FREE_KEY { // end of chain already
-		m.data[ptr] = key
-		m.data[ptr+1] = val
-		if m.size >= m.threshold {
-			m.rehash()
-		} else {
-			m.size++
-		}
-		return
-	} else if k == key { // overwrite existed value
-		m.data[ptr+1] = val
-		return
-	}
-
+	ptr := phiMix(key)
 	for {
-		ptr = (ptr + 2) & m.mask2
-		k = m.data[ptr]
-
+		ptr &= m.mask
+		k := *m.getK(ptr)
 		if k == FREE_KEY {
-			m.data[ptr] = key
-			m.data[ptr+1] = val
+			*m.getK(ptr) = key
+			*m.getV(ptr) = val
 			if m.size >= m.threshold {
 				m.rehash()
 			} else {
 				m.size++
 			}
 			return
-		} else if k == key {
-			m.data[ptr+1] = val
+		}
+		if k == key {
+			*m.getV(ptr) = val
 			return
 		}
+		ptr += 1
 	}
-
 }
 
-// Del deletes a key and its value.
-func (m *Map) Del(key int64) {
+func (m *Map) rehash() {
+	newCapacity := len(m.data) * 2
+	m.threshold = calcThreshold(newCapacity, m.fillFactor)
+	m.mask = uint64(newCapacity - 1)
+
+	data := m.data
+	m.data = make([]Entry, newCapacity)
+	m.dataptr = unsafe.Pointer(&m.data[0])
+	if m.hasFreeKey {
+		m.size = 1
+	} else {
+		m.size = 0
+	}
+
+	var i int64
+COPY:
+	for i = 0; i < int64(len(data)); i++ {
+		e := data[i]
+		if e.K == FREE_KEY {
+			continue
+		}
+
+		// Manually inline the Set function to avoid unnecessary calculation.
+		ptr := phiMix(e.K)
+		for {
+			ptr &= m.mask
+			k := *m.getK(ptr)
+			if k == FREE_KEY {
+				*m.getK(ptr) = e.K
+				*m.getV(ptr) = e.V
+				m.size++
+				continue COPY
+			}
+			ptr += 1
+		}
+	}
+}
+
+// Delete deletes a key and it's value from the map.
+func (m *Map) Delete(key int64) {
 	if key == FREE_KEY {
-		m.hasFreeKey = false
-		m.size--
+		if m.hasFreeKey {
+			m.hasFreeKey = false
+			m.size--
+		}
 		return
 	}
 
-	ptr := (phiMix(key) & m.mask) << 1
-	k := m.data[ptr]
-
-	if k == key {
-		m.shiftKeys(ptr)
-		m.size--
-		return
-	} else if k == FREE_KEY { // end of chain already
-		return
-	}
-
+	ptr := phiMix(key)
 	for {
-		ptr = (ptr + 2) & m.mask2
-		k = m.data[ptr]
-
+		ptr &= m.mask
+		k := *m.getK(ptr)
 		if k == key {
 			m.shiftKeys(ptr)
 			m.size--
 			return
-		} else if k == FREE_KEY {
+		}
+		if k == FREE_KEY {
 			return
 		}
-
+		ptr += 1
 	}
 }
 
-func (m *Map) shiftKeys(pos int64) int64 {
-	// Shift entries with the same hash.
-	var last, slot int64
+// shiftKeys shifts entries with the same hash.
+func (m *Map) shiftKeys(pos uint64) uint64 {
+	var last, slot uint64
 	var k int64
-	var data = m.data
 	for {
 		last = pos
-		pos = (last + 2) & m.mask2
+		pos = last + 1
 		for {
-			k = data[pos]
+			pos &= m.mask
+			k = *m.getK(pos)
 			if k == FREE_KEY {
-				data[last] = FREE_KEY
+				*m.getK(last) = FREE_KEY
 				return last
 			}
 
-			slot = (phiMix(k) & m.mask) << 1
+			slot = phiMix(k) & m.mask
 			if last <= pos {
 				if last >= slot || slot > pos {
 					break
@@ -221,85 +282,58 @@ func (m *Map) shiftKeys(pos int64) int64 {
 					break
 				}
 			}
-			pos = (pos + 2) & m.mask2
+			pos += 1
 		}
-		data[last] = k
-		data[last+1] = data[pos+1]
+		*(m.getK(last)) = *m.getK(pos)
+		*(m.getV(last)) = *m.getV(pos)
 	}
 }
 
-func (m *Map) rehash() {
-	newCapacity := len(m.data) * 2
-	m.threshold = int(math.Floor(float64(newCapacity/2) * m.fillFactor))
-	m.mask = int64(newCapacity/2 - 1)
-	m.mask2 = int64(newCapacity - 1)
+// Keys returns a slice of all keys stored in the map.
+func (m *Map) Keys() []int64 {
+	keys := make([]int64, 0, m.size)
+	if m.hasFreeKey {
+		keys = append(keys, FREE_KEY)
+	}
+	data := m.data
+	for i := 0; i < len(data); i++ {
+		if data[i].K == FREE_KEY {
+			continue
+		}
+		keys = append(keys, data[i].K)
+	}
+	return keys
+}
 
-	data := make([]int64, len(m.data)) // copy of original data
+// Items returns a slice of all items stored in the map.
+func (m *Map) Items() []Entry {
+	items := make([]Entry, 0, m.size)
+	if m.hasFreeKey {
+		items = append(items, Entry{FREE_KEY, m.freeVal})
+	}
+	data := m.data
+	for i := 0; i < len(data); i++ {
+		if data[i].K == FREE_KEY {
+			continue
+		}
+		items = append(items, data[i])
+	}
+	return items
+}
+
+// Clone returns a deep copy of the the map.
+func (m *Map) Clone() *Map {
+	data := make([]Entry, m.size)
 	copy(data, m.data)
-
-	m.data = make([]int64, newCapacity)
-	if m.hasFreeKey { // reset size
-		m.size = 1
-	} else {
-		m.size = 0
+	newMap := &Map{
+		data:       data,
+		dataptr:    unsafe.Pointer(&data[0]),
+		fillFactor: m.fillFactor,
+		threshold:  m.threshold,
+		size:       m.size,
+		mask:       m.mask,
+		hasFreeKey: m.hasFreeKey,
+		freeVal:    m.freeVal,
 	}
-
-	var o int64
-	for i := 0; i < len(data); i += 2 {
-		o = data[i]
-		if o != FREE_KEY {
-			m.Put(o, data[i+1])
-		}
-	}
-}
-
-// Size returns size of the map.
-func (m *Map) Size() int {
-	return m.size
-}
-
-// Keys returns a channel for iterating all keys.
-func (m *Map) Keys() chan int64 {
-	c := make(chan int64, 10)
-	go func() {
-		data := m.data
-		var k int64
-
-		if m.hasFreeKey {
-			c <- FREE_KEY // value is m.freeVal
-		}
-
-		for i := 0; i < len(data); i += 2 {
-			k = data[i]
-			if k == FREE_KEY {
-				continue
-			}
-			c <- k // value is data[i+1]
-		}
-		close(c)
-	}()
-	return c
-}
-
-// Items returns a channel for iterating all key-value pairs.
-func (m *Map) Items() chan [2]int64 {
-	c := make(chan [2]int64, 10)
-	go func() {
-		data := m.data
-		var k int64
-
-		if m.hasFreeKey {
-			c <- [2]int64{FREE_KEY, m.freeVal}
-		}
-
-		for i := 0; i < len(data); i += 2 {
-			k = data[i]
-			if k == FREE_KEY {
-				continue
-			}
-			c <- [2]int64{k, data[i+1]}
-		}
-		close(c)
-	}()
-	return c
+	return newMap
 }
