@@ -1,3 +1,3 @@
-module github.com/jxskiss/intintmap
+module github.com/jxskiss/typemap
 
 go 1.13

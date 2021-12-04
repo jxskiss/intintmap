@@ -1,4 +1,4 @@
-package intmap
+package typemap
 
 import (
 	"sync"
@@ -6,12 +6,11 @@ import (
 	"unsafe"
 )
 
-func BenchmarkConcurrentStdMapGet_NoLock(b *testing.B) {
+func Benchmark_Concurrent_StdMap_Get_NoLock(b *testing.B) {
 	m := make(map[uintptr]uintptr)
 	typPtrs := fillMap(func(k, v uintptr) { m[k] = v })
 
 	b.ResetTimer()
-	b.SetParallelism(8)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			for _, ptr := range typPtrs {
@@ -21,13 +20,12 @@ func BenchmarkConcurrentStdMapGet_NoLock(b *testing.B) {
 	})
 }
 
-func BenchmarkConcurrentStdMapGet_RWMutex(b *testing.B) {
+func Benchmark_Concurrent_StdMap_Get_RWMutex(b *testing.B) {
 	var mu sync.RWMutex
 	m := make(map[uintptr]uintptr)
 	typPtrs := fillMap(func(k, v uintptr) { m[k] = v })
 
 	b.ResetTimer()
-	b.SetParallelism(8)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			for _, ptr := range typPtrs {
@@ -39,26 +37,11 @@ func BenchmarkConcurrentStdMapGet_RWMutex(b *testing.B) {
 	})
 }
 
-func BenchmarkConcurrentSliceIndex(b *testing.B) {
-	slice := make([]uintptr, 12)
-
-	b.ResetTimer()
-	b.SetParallelism(8)
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			for i := 0; i < 12; i++ {
-				_ = slice[i]
-			}
-		}
-	})
-}
-
-func BenchmarkConcurrentSyncMapGet(b *testing.B) {
+func Benchmark_Concurrent_SyncMap_Get(b *testing.B) {
 	m := sync.Map{}
 	typPtrs := fillMap(func(k, v uintptr) { m.Store(k, v) })
 
 	b.ResetTimer()
-	b.SetParallelism(8)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			for _, ptr := range typPtrs {
@@ -69,16 +52,28 @@ func BenchmarkConcurrentSyncMapGet(b *testing.B) {
 	})
 }
 
-func BenchmarkConcurrentCOWMapGet(b *testing.B) {
-	m := New(8, 0.6)
-	typPtrs := fillMap(func(k, v uintptr) { m.Set(int64(k), int64(v)) })
+func Benchmark_Concurrent_Slice_Index(b *testing.B) {
+	slice := make([]uintptr, 12)
 
 	b.ResetTimer()
-	b.SetParallelism(8)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			for i := 0; i < 12; i++ {
+				_ = slice[i]
+			}
+		}
+	})
+}
+
+func Benchmark_Concurrent_TypeMap_Get(b *testing.B) {
+	m := NewTypeMap()
+	typPtrs := fillMap(func(k, v uintptr) { m.SetByUintptr(k, v) })
+
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			for _, ptr := range typPtrs {
-				m.Get(int64(ptr))
+				m.GetByUintptr(ptr)
 			}
 		}
 	})

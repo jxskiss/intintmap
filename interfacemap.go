@@ -1,125 +1,63 @@
-package intmap
+package typemap
 
-import "unsafe"
+import (
+	"math"
+	"unsafe"
+)
 
-// InterfaceMap is a hash map data structure optimized for int64 keys and
-// interface values.
-// InterfaceMap should be created by calling NewInterfaceMap, usage of
-// uninitialized zero InterfaceMap will cause panic.
-//
-// InterfaceMap is not safe to use concurrently, for a concurrently safe
-// map, you may check the COWMap and TypeMap.
-type InterfaceMap struct {
-	m *interfaceMap
+// INT_PHI is for scrambling the keys.
+const INT_PHI = 0x9E3779B9
 
-	hasFreeKey bool
-	freeVal    interface{}
+// FREE_KEY is the 'free' key.
+const FREE_KEY = 0
+
+func phiMix(x int64) uint64 {
+	h := x * INT_PHI
+	return uint64(h ^ (h >> 16))
 }
 
-// InterfaceEntry represents a key value pair in a InterfaceMap or TypeMap.
-type InterfaceEntry struct {
+func nextPowerOfTwo(x int) int {
+	if x == 0 {
+		return 1
+	}
+
+	x--
+	x |= x >> 1
+	x |= x >> 2
+	x |= x >> 4
+	x |= x >> 8
+	x |= x >> 16
+
+	return x + 1
+}
+
+func arraySize(exp int, fill float64) int {
+	s := int(math.Ceil(float64(exp) / fill))
+	s = nextPowerOfTwo(s)
+	if s < 2 {
+		s = 2
+	}
+	return s
+}
+
+func calcThreshold(capacity int, fillFactor float64) int {
+	return int(math.Floor(float64(capacity) * fillFactor))
+}
+
+// interfaceEntry represents a key value pair in a interfaceMap or TypeMap.
+type interfaceEntry struct {
 	K int64
 	V interface{}
 }
-
-// NewInterfaceMap returns a map initialized with the stated size and
-// fill factor. The InterfaceMap will grow as needed.
-func NewInterfaceMap(size int, fillFactor float64) *InterfaceMap {
-	if fillFactor <= 0 || fillFactor >= 1 {
-		panic("fill factor must be in (0, 1)")
-	}
-	if size <= 0 {
-		panic("size must be positive")
-	}
-
-	imap := newInterfaceMap(size, fillFactor)
-	return &InterfaceMap{m: imap}
-}
-
-// Size returns the size of the map.
-func (m *InterfaceMap) Size() int {
-	size := m.m.size
-	if m.hasFreeKey {
-		size++
-	}
-	return size
-}
-
-// Get returns the value if teh key is found in the map.
-func (m *InterfaceMap) Get(key int64) interface{} {
-	if key == FREE_KEY {
-		if m.hasFreeKey {
-			return m.freeVal
-		}
-		return nil
-	}
-	return m.m.Get(key)
-}
-
-// Has tells whether a key is found in the map.
-func (m *InterfaceMap) Has(key int64) bool {
-	if key == FREE_KEY {
-		if m.hasFreeKey {
-			return true
-		}
-		return false
-	}
-	return m.m.Has(key)
-}
-
-// Set adds or updates key with value to the map.
-func (m *InterfaceMap) Set(key int64, val interface{}) {
-	if key == FREE_KEY {
-		m.hasFreeKey = true
-		m.freeVal = val
-		return
-	}
-	m.m.Set(key, val)
-}
-
-// Delete deletes a key and it's value from the map.
-func (m *InterfaceMap) Delete(key int64) {
-	if key == FREE_KEY {
-		if m.hasFreeKey {
-			m.hasFreeKey = false
-			m.freeVal = nil
-		}
-		return
-	}
-	m.m.Delete(key)
-}
-
-// Keys returns a slice of all keys stored in the map.
-func (m *InterfaceMap) Keys() []int64 {
-	keys := m.m.Keys()
-	if m.hasFreeKey {
-		keys = append(keys, FREE_KEY)
-	}
-	return keys
-}
-
-// Items returns a slice of all items stored in the map.
-func (m *InterfaceMap) Items() []InterfaceEntry {
-	items := m.m.Items()
-	if m.hasFreeKey {
-		items = append(items, InterfaceEntry{
-			K: FREE_KEY,
-			V: m.freeVal,
-		})
-	}
-	return items
-}
-
-// ------------------------- interfaceMap ------------------------- //
 
 func newInterfaceMap(size int, fillFactor float64) *interfaceMap {
 	capacity := arraySize(size, fillFactor)
 	threshold := calcThreshold(capacity, fillFactor)
 	mask := capacity - 1
-	data := make([]InterfaceEntry, capacity)
+	data := make([]interfaceEntry, capacity)
 	return &interfaceMap{
 		data:       data,
-		dataptr:    unsafe.Pointer(&data[0]),
+		dptr:       unsafe.Pointer(&data[0]),
 		fillFactor: fillFactor,
 		threshold:  threshold,
 		size:       0,
@@ -128,8 +66,8 @@ func newInterfaceMap(size int, fillFactor float64) *interfaceMap {
 }
 
 type interfaceMap struct {
-	data    []InterfaceEntry
-	dataptr unsafe.Pointer
+	data []interfaceEntry
+	dptr unsafe.Pointer
 
 	fillFactor float64
 	threshold  int
@@ -137,14 +75,19 @@ type interfaceMap struct {
 	mask       uint64
 }
 
+// Size returns the size of the map.
+func (m *interfaceMap) Size() int {
+	return m.size
+}
+
 // getK helps to eliminate slice bounds checking
 func (m *interfaceMap) getK(ptr uint64) *int64 {
-	return (*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr)*3*ptrsize))
+	return (*int64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize))
 }
 
 // getV helps to eliminate slice bounds checking
 func (m *interfaceMap) getV(ptr uint64) *interface{} {
-	return (*interface{})(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr)*3*ptrsize + ptrsize))
+	return (*interface{})(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize + ptrsize))
 }
 
 // Get returns the value if the key is found, else it returns nil.
@@ -157,9 +100,9 @@ func (m *interfaceMap) Get(key int64) interface{} {
 	for {
 		ptr &= m.mask
 		// manually inline m.getK and m.getV
-		k := *(*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr)*3*ptrsize))
+		k := *(*int64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize))
 		if k == key {
-			return *(*interface{})(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr)*3*ptrsize + ptrsize))
+			return *(*interface{})(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize + ptrsize))
 		}
 		if k == 0 {
 			return nil
@@ -178,7 +121,7 @@ func (m *interfaceMap) Has(key int64) bool {
 	for {
 		ptr &= m.mask
 		// manually inline m.getK and m.getV
-		k := *(*int64)(unsafe.Pointer(uintptr(m.dataptr) + uintptr(ptr)*3*ptrsize))
+		k := *(*int64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize))
 		if k == key {
 			return true
 		}
@@ -219,8 +162,8 @@ func (m *interfaceMap) rehash() {
 	m.mask = uint64(newCapacity - 1)
 
 	data := m.data
-	m.data = make([]InterfaceEntry, newCapacity)
-	m.dataptr = unsafe.Pointer(&m.data[0])
+	m.data = make([]interfaceEntry, newCapacity)
+	m.dptr = unsafe.Pointer(&m.data[0])
 	m.size = 0
 
 	var i int64
@@ -303,9 +246,18 @@ func (m *interfaceMap) Copy() *interfaceMap {
 	if m.size >= m.threshold {
 		capacity *= 2
 	}
-	newMap := newInterfaceMap(capacity, m.fillFactor)
+	mask := capacity - 1
+	data := make([]interfaceEntry, capacity)
+	newMap := &interfaceMap{
+		data:       data,
+		dptr:       unsafe.Pointer(&data[0]),
+		fillFactor: m.fillFactor,
+		threshold:  m.threshold,
+		size:       0,
+		mask:       uint64(mask),
+	}
 	for _, e := range m.data {
-		if e.K == 0 {
+		if e.K == FREE_KEY {
 			continue
 		}
 		newMap.Set(e.K, e.V)
@@ -325,8 +277,8 @@ func (m *interfaceMap) Keys() []int64 {
 	return keys
 }
 
-func (m *interfaceMap) Items() []InterfaceEntry {
-	items := make([]InterfaceEntry, 0, m.size+1)
+func (m *interfaceMap) Items() []interfaceEntry {
+	items := make([]interfaceEntry, 0, m.size+1)
 	data := m.data
 	for i := 0; i < len(data); i++ {
 		if data[i].K == FREE_KEY {

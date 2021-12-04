@@ -1,4 +1,4 @@
-package intmap
+package typemap
 
 import (
 	"reflect"
@@ -35,18 +35,28 @@ func (m *TypeMap) Size() int {
 	return (*interfaceMap)(atomic.LoadPointer(&m.m)).size
 }
 
-// GetByUintptr returns value for the the given uintptr key.
-// If key is not found in the map, it returns nil.
-func (m *TypeMap) GetByUintptr(key uintptr) interface{} {
-	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64(key))
-}
-
 // GetByType returns value for the given reflect.Type.
 // If key is not found in the map, it returns nil.
 func (m *TypeMap) GetByType(key reflect.Type) interface{} {
 	// type iface { tab  *itab, data unsafe.Pointer }
 	typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
 	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64(typeptr))
+}
+
+// GetByUintptr returns value for the given uintptr key.
+// If key is not found in the map, it returns nil.
+func (m *TypeMap) GetByUintptr(key uintptr) interface{} {
+	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64(key))
+}
+
+// SetByType adds or updates value to the map using reflect.Type key.
+// If the key value is not present in the underlying map, it will copy the
+// map and add the key value to the copy, then swap to the new map using
+// atomic operation.
+func (m *TypeMap) SetByType(key reflect.Type, val interface{}) {
+	// type iface { tab  *itab, data unsafe.Pointer }
+	typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
+	m.SetByUintptr(typeptr, val)
 }
 
 // SetByUintptr adds or updates value to the map using uintptr key.
@@ -63,14 +73,4 @@ func (m *TypeMap) SetByUintptr(key uintptr, val interface{}) {
 	newMap := imap.Copy()
 	newMap.Set(int64(key), val)
 	atomic.StorePointer(&m.m, unsafe.Pointer(newMap))
-}
-
-// SetByType adds or updates value to the map using reflect.Type key.
-// If the key value is not present in the underlying map, it will copy the
-// map and add the key value to the copy, then swap to the new map using
-// atomic operation.
-func (m *TypeMap) SetByType(key reflect.Type, val interface{}) {
-	// type iface { tab  *itab, data unsafe.Pointer }
-	typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
-	m.SetByUintptr(typeptr, val)
 }

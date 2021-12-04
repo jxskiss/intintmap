@@ -1,4 +1,4 @@
-package intmap
+package typemap
 
 import (
 	"reflect"
@@ -26,24 +26,20 @@ func TestTypeMap(t *testing.T) {
 	}
 
 	for _, val := range values1[:3] {
-		//t.Logf("SetByType: %T", val)
 		m.SetByType(reflect.TypeOf(val), 1)
 	}
 	for _, val := range values1[3:] {
-		//t.Logf("SetByUintptr: %T", val)
 		typeptr := (*(*[2]uintptr)(unsafe.Pointer(&val)))[0]
 		m.SetByUintptr(typeptr, 1)
 	}
 
 	for _, val := range values1 {
-		//t.Logf("GetByType: %T", val)
 		got := m.GetByType(reflect.TypeOf(val))
 		if got != 1 {
 			t.Errorf("expected 1 as value, got %v", got)
 		}
 	}
 	for _, val := range values2 {
-		//t.Logf("GetByType: %T", val)
 		got := m.GetByType(reflect.TypeOf(val))
 		if got != nil {
 			t.Errorf("expected nil, got %v", got)

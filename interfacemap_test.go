@@ -1,19 +1,19 @@
-package intmap
+package typemap
 
 import "testing"
 
 func TestInterfaceMapSimple(t *testing.T) {
-	m := NewInterfaceMap(10, 0.99)
+	m := newInterfaceMap(10, 0.99)
 	var i int64
 	var v interface{}
 
 	// --------------------------------------------------------------------
-	// Put() and Get()
+	// Set() and Get()
 
-	for i = 0; i < 20000; i += 2 {
+	for i = 1; i < 20001; i += 2 {
 		m.Set(i, i)
 	}
-	for i = 0; i < 20000; i += 2 {
+	for i = 1; i < 20001; i += 2 {
 		if v = m.Get(i); v != i {
 			t.Errorf("didn't get expected value")
 		}
@@ -22,15 +22,15 @@ func TestInterfaceMapSimple(t *testing.T) {
 		}
 	}
 
-	if m.Size() != int(20000/2) {
-		t.Errorf("size (%d) is not right, should be %d", m.Size(), int(20000/2))
+	if m.Size() != 20000/2 {
+		t.Errorf("size (%d) is not right, should be %d", m.Size(), 20000/2)
 	}
 
 	// --------------------------------------------------------------------
 	// Keys()
 
 	m0 := make(map[int64]int64, 1000)
-	for i = 0; i < 20000; i += 2 {
+	for i = 1; i < 20001; i += 2 {
 		m0[i] = i
 	}
 	n := len(m0)
@@ -52,7 +52,7 @@ func TestInterfaceMapSimple(t *testing.T) {
 	// Items()
 
 	m0 = make(map[int64]int64, 1000)
-	for i = 0; i < 20000; i += 2 {
+	for i = 1; i < 20001; i += 2 {
 		m0[i] = i
 	}
 	n = len(m0)
@@ -74,12 +74,12 @@ func TestInterfaceMapSimple(t *testing.T) {
 	}
 
 	// --------------------------------------------------------------------
-	// Del()
+	// Delete()
 
-	for i = 0; i < 10000; i += 2 {
+	for i = 1; i < 10001; i += 2 {
 		m.Delete(i)
 	}
-	for i = 0; i < 10000; i += 2 {
+	for i = 1; i < 10001; i += 2 {
 		if v = m.Get(i); v != nil {
 			t.Errorf("didn't get expected 'not found' flag")
 		}
@@ -87,7 +87,7 @@ func TestInterfaceMapSimple(t *testing.T) {
 			t.Errorf("didn't get expected 'not found' flag")
 		}
 	}
-	for i = 10000; i < 20000; i += 2 {
+	for i = 10001; i < 20001; i += 2 {
 		if v = m.Get(i); v != i {
 			t.Errorf("didn't get expected value")
 		}
@@ -96,22 +96,22 @@ func TestInterfaceMapSimple(t *testing.T) {
 		}
 	}
 
-	for i = 10000; i < 20000; i += 2 {
+	for i = 10001; i < 20001; i += 2 {
 		m.Delete(i)
 	}
-	for i = 10000; i < 20000; i += 2 {
+	for i = 10001; i < 20001; i += 2 {
 		if v = m.Get(i); v != nil {
 			t.Errorf("didn't get expected 'not found' flag")
 		}
 	}
 
 	// --------------------------------------------------------------------
-	// Put() and Get()
+	// Set() and Get()
 
-	for i = 0; i < 20000; i += 2 {
+	for i = 1; i < 20001; i += 2 {
 		m.Set(i, i*2)
 	}
-	for i = 0; i < 20000; i += 2 {
+	for i = 1; i < 20001; i += 2 {
 		if v = m.Get(i); v != i*2 {
 			t.Errorf("didn't get expected value")
 		}
