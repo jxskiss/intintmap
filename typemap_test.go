@@ -3,7 +3,6 @@ package typemap
 import (
 	"reflect"
 	"testing"
-	"time"
 	"unsafe"
 )
 
@@ -26,15 +25,19 @@ func TestTypeMap(t *testing.T) {
 		TestType12{},
 	}
 
+	var builder = func(x int) func() interface{} {
+		return func() interface{} { return x }
+	}
+
 	for _, val := range values1[:3] {
-		m.SetByType(reflect.TypeOf(val), 1)
+		m.SetByType(reflect.TypeOf(val), builder(1))
 	}
 	for _, val := range values1[3:] {
 		typeptr := (*(*[2]uintptr)(unsafe.Pointer(&val)))[0]
-		m.SetByUintptr(typeptr, 1)
+		m.SetByUintptr(typeptr, builder(1))
 	}
 
-	time.Sleep(time.Millisecond)
+	m.calibrate(true)
 
 	for _, val := range values1 {
 		got := m.GetByType(reflect.TypeOf(val))

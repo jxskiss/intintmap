@@ -13,8 +13,8 @@
 [license]: https://github.com/jxskiss/typemap/blob/master/LICENSE
 
 Package typemap implements a fast concurrent safe map suitable to cache type related information.
-It copies data when writing to the map (copy-on-write), thus it's lock-free and achieves
-super high [performance](#performance) for concurrent reading operations.
+It uses copy-on-write algorithm, it's lock-free and achieves very high [performance](#performance)
+for concurrent reading operations.
 
 The open addressing linear probing hash table is forked from [intintmap](https://github.com/brentp/intintmap).
 

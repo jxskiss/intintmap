@@ -67,7 +67,10 @@ func Benchmark_Concurrent_Slice_Index(b *testing.B) {
 
 func Benchmark_Concurrent_TypeMap_Get(b *testing.B) {
 	m := New()
-	typPtrs := fillMap(func(k, v uintptr) { m.SetByUintptr(k, v) })
+	typPtrs := fillMap(func(k, v uintptr) {
+		m.SetByUintptr(k, func() interface{} { return v })
+	})
+	m.calibrate(true)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

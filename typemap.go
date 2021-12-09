@@ -8,21 +8,27 @@ import (
 )
 
 const (
-	fillFactor = 0.6
-	ptrsize    = unsafe.Sizeof(uintptr(0))
+	fillFactor       = 0.6
+	slowHitThreshold = 128
+	ptrsize          = unsafe.Sizeof(uintptr(0))
 )
 
 // TypeMap provides a lockless copy-on-write map mainly to use for type
 // information cache, such as runtime generated encoders and decoders.
-// TypeMap is safe to use concurrently, when SetByUintptr, SetByType are
-// called, the underlying map will be copied.
 //
-// The fill factor used for TypeMap is 0.6. A TypeMap will grow as needed.
+// TypeMap is safe to use concurrently, it will grow as needed.
 type TypeMap struct {
 	m unsafe.Pointer // *interfaceMap
 
 	lock uint32
-	m2   sync.Map
+	m2   sync.Map // uintptr -> *dirtyEntry
+
+	slowHit uint32
+}
+
+type dirtyEntry struct {
+	once sync.Once
+	val  atomic.Value // interface{}
 }
 
 // New returns a new TypeMap with 8 as initial capacity.
@@ -39,6 +45,8 @@ func (m *TypeMap) Size() int {
 
 // GetByType returns value for the given reflect.Type.
 // If key is not found in the map, it returns nil.
+//
+// This is the fast path, it will be inlined into the caller.
 func (m *TypeMap) GetByType(key reflect.Type) interface{} {
 
 	// type iface { tab  *itab, data unsafe.Pointer }
@@ -52,6 +60,8 @@ func (m *TypeMap) GetByType(key reflect.Type) interface{} {
 
 // GetByUintptr returns value for the given uintptr key.
 // If key is not found in the map, it returns nil.
+//
+// This is the fast path, it will be inlined into the caller.
 func (m *TypeMap) GetByUintptr(key uintptr) interface{} {
 
 	//imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
@@ -60,46 +70,78 @@ func (m *TypeMap) GetByUintptr(key uintptr) interface{} {
 	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64(key))
 }
 
-// SetByType adds or updates value to the map using reflect.Type key.
-// If the key value is not present in the underlying map, it will copy the
-// map and add the key value to the copy, then swap to the new map using
-// atomic operation.
-func (m *TypeMap) SetByType(key reflect.Type, val interface{}) {
+// SetByType checks whether the given key is in the slow path,
+// if the key exists it returns the cached value, else it builds the value
+// by calling f, it then caches and returns the value.
+//
+// By accepting a function instead of a pre-built value, it guarantees that
+// f will be called exactly once, which may be expensive.
+//
+// This function will trigger a calibrating to move data from the slow path
+// to the fast path if needed.
+func (m *TypeMap) SetByType(key reflect.Type, f func() interface{}) interface{} {
 	// type iface { tab  *itab, data unsafe.Pointer }
 	typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
-	m.SetByUintptr(typeptr, val)
+	return m.SetByUintptr(typeptr, f)
 }
 
-// SetByUintptr adds or updates value to the map using uintptr key.
-// If the key value is not present in the underlying map, it will copy the
-// map and add the key value to the copy, then swap to the new map using
-// atomic operation.
-func (m *TypeMap) SetByUintptr(key uintptr, val interface{}) {
-	m.m2.Store(key, val)
-	if atomic.CompareAndSwapUint32(&m.lock, 0, 1) {
-		go m.calibrate()
-	}
-}
-
-func (m *TypeMap) calibrate() {
-	var newMap *interfaceMap
-	imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
-	keys := make([]interface{}, 0)
-	m.m2.Range(func(key, value interface{}) bool {
-		if imap.Get(int64(key.(uintptr))) == nil {
-			if newMap == nil {
-				newMap = imap.Copy()
-			}
-			newMap.Set(int64(key.(uintptr)), value)
-			keys = append(keys, key)
-		}
-		return true
+// SetByUintptr checks whether the given key is in the slow path,
+// if the key exists it returns the cached value, else it builds the value
+// by calling f, it then caches and returns the value.
+//
+// By accepting a function instead of a pre-built value, it guarantees that
+// f will be called exactly once, which may be expensive.
+//
+// This function will trigger a calibrating to move data from the slow path
+// to the fast path if needed.
+func (m *TypeMap) SetByUintptr(key uintptr, f func() interface{}) interface{} {
+	x, _ := m.m2.LoadOrStore(key, &dirtyEntry{})
+	entry := x.(*dirtyEntry)
+	entry.once.Do(func() {
+		entry.val.Store(f())
 	})
-	if newMap != nil {
-		atomic.StorePointer(&m.m, unsafe.Pointer(newMap))
+	val := entry.val.Load()
+	if atomic.AddUint32(&m.slowHit, 1) > slowHitThreshold {
+		m.calibrate(false)
+	}
+	return val
+}
+
+func (m *TypeMap) calibrate(wait bool) {
+	if !atomic.CompareAndSwapUint32(&m.lock, 0, 1) {
+		return
+	}
+
+	atomic.StoreUint32(&m.slowHit, 0)
+	done := make(chan struct{})
+
+	go func() {
+		var newMap *interfaceMap
+		imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
+		keys := make([]interface{}, 0)
+		m.m2.Range(func(key, value interface{}) bool {
+			if imap.Get(int64(key.(uintptr))) == nil {
+				if newMap == nil {
+					newMap = imap.Copy()
+				}
+				entry := value.(*dirtyEntry)
+				newMap.Set(int64(key.(uintptr)), entry.val.Load())
+			}
+			keys = append(keys, key)
+			return true
+		})
+		if newMap != nil {
+			atomic.StorePointer(&m.m, unsafe.Pointer(newMap))
+		}
 		for _, k := range keys {
 			m.m2.Delete(k)
 		}
+		atomic.StoreUint32(&m.lock, 0)
+		close(done)
+	}()
+
+	// help testing
+	if wait {
+		<-done
 	}
-	atomic.StoreUint32(&m.lock, 0)
 }
