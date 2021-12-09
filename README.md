@@ -26,7 +26,7 @@ Related articles:
 ## Usage
 
 ```go
-typeCache := typemap.NewTypeMap()
+typeCache := typemap.New()
 
 typeCache.SetByType(reflect.TypeOf(someType{}), something) // or
 typeCache.SetByUintptr(uintptr(typePointer), something)

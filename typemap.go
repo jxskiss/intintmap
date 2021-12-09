@@ -2,7 +2,6 @@ package typemap
 
 import (
 	"reflect"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -77,12 +76,9 @@ func (m *TypeMap) SetByType(key reflect.Type, val interface{}) {
 // atomic operation.
 func (m *TypeMap) SetByUintptr(key uintptr, val interface{}) {
 	m.m2.Store(key, val)
-
-	for !atomic.CompareAndSwapUint32(&m.lock, 0, 1) {
-		runtime.Gosched()
+	if atomic.CompareAndSwapUint32(&m.lock, 0, 1) {
+		go m.calibrate()
 	}
-	m.calibrate()
-	atomic.StoreUint32(&m.lock, 0)
 }
 
 func (m *TypeMap) calibrate() {
@@ -90,11 +86,13 @@ func (m *TypeMap) calibrate() {
 	imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
 	keys := make([]interface{}, 0)
 	m.m2.Range(func(key, value interface{}) bool {
-		if newMap == nil {
-			newMap = imap.Copy()
+		if imap.Get(int64(key.(uintptr))) == nil {
+			if newMap == nil {
+				newMap = imap.Copy()
+			}
+			newMap.Set(int64(key.(uintptr)), value)
+			keys = append(keys, key)
 		}
-		newMap.Set(int64(key.(uintptr)), value)
-		keys = append(keys, key)
 		return true
 	})
 	if newMap != nil {
@@ -103,4 +101,5 @@ func (m *TypeMap) calibrate() {
 			m.m2.Delete(k)
 		}
 	}
+	atomic.StoreUint32(&m.lock, 0)
 }

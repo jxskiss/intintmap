@@ -3,6 +3,7 @@ package typemap
 import (
 	"reflect"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -32,6 +33,8 @@ func TestTypeMap(t *testing.T) {
 		typeptr := (*(*[2]uintptr)(unsafe.Pointer(&val)))[0]
 		m.SetByUintptr(typeptr, 1)
 	}
+
+	time.Sleep(time.Millisecond)
 
 	for _, val := range values1 {
 		got := m.GetByType(reflect.TypeOf(val))
