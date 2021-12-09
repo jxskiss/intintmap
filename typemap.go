@@ -2,14 +2,15 @@ package typemap
 
 import (
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
 const (
-	typemapFillFactor = 0.6
-	ptrsize           = unsafe.Sizeof(uintptr(0))
+	fillFactor = 0.6
+	ptrsize    = unsafe.Sizeof(uintptr(0))
 )
 
 // TypeMap provides a lockless copy-on-write map mainly to use for type
@@ -19,33 +20,44 @@ const (
 //
 // The fill factor used for TypeMap is 0.6. A TypeMap will grow as needed.
 type TypeMap struct {
-	l sync.Mutex
 	m unsafe.Pointer // *interfaceMap
+
+	lock uint32
+	m2   sync.Map
 }
 
-// NewTypeMap returns a new TypeMap with 8 as initial capacity.
-func NewTypeMap() *TypeMap {
+// New returns a new TypeMap with 8 as initial capacity.
+func New() *TypeMap {
 	size := 8
-	imap := newInterfaceMap(size, typemapFillFactor)
+	imap := newInterfaceMap(size, fillFactor)
 	return &TypeMap{m: unsafe.Pointer(imap)}
 }
 
 // Size returns size of the map.
 func (m *TypeMap) Size() int {
-	return (*interfaceMap)(atomic.LoadPointer(&m.m)).size
+	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Size()
 }
 
 // GetByType returns value for the given reflect.Type.
 // If key is not found in the map, it returns nil.
 func (m *TypeMap) GetByType(key reflect.Type) interface{} {
+
 	// type iface { tab  *itab, data unsafe.Pointer }
-	typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
-	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64(typeptr))
+
+	//typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
+	//imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
+	//return imap.Get(int64(typeptr))
+
+	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64((*(*[2]uintptr)(unsafe.Pointer(&key)))[1]))
 }
 
 // GetByUintptr returns value for the given uintptr key.
 // If key is not found in the map, it returns nil.
 func (m *TypeMap) GetByUintptr(key uintptr) interface{} {
+
+	//imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
+	//return imap.Get(int64(key))
+
 	return (*interfaceMap)(atomic.LoadPointer(&m.m)).Get(int64(key))
 }
 
@@ -64,13 +76,31 @@ func (m *TypeMap) SetByType(key reflect.Type, val interface{}) {
 // map and add the key value to the copy, then swap to the new map using
 // atomic operation.
 func (m *TypeMap) SetByUintptr(key uintptr, val interface{}) {
-	m.l.Lock()
-	defer m.l.Unlock()
-	imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
-	if v := imap.Get(int64(key)); v == val {
-		return
+	m.m2.Store(key, val)
+
+	for !atomic.CompareAndSwapUint32(&m.lock, 0, 1) {
+		runtime.Gosched()
 	}
-	newMap := imap.Copy()
-	newMap.Set(int64(key), val)
-	atomic.StorePointer(&m.m, unsafe.Pointer(newMap))
+	m.calibrate()
+	atomic.StoreUint32(&m.lock, 0)
+}
+
+func (m *TypeMap) calibrate() {
+	var newMap *interfaceMap
+	imap := (*interfaceMap)(atomic.LoadPointer(&m.m))
+	keys := make([]interface{}, 0)
+	m.m2.Range(func(key, value interface{}) bool {
+		if newMap == nil {
+			newMap = imap.Copy()
+		}
+		newMap.Set(int64(key.(uintptr)), value)
+		keys = append(keys, key)
+		return true
+	})
+	if newMap != nil {
+		atomic.StorePointer(&m.m, unsafe.Pointer(newMap))
+		for _, k := range keys {
+			m.m2.Delete(k)
+		}
+	}
 }

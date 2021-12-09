@@ -7,7 +7,7 @@ import (
 )
 
 func TestTypeMap(t *testing.T) {
-	m := NewTypeMap()
+	m := New()
 	values1 := []interface{}{
 		TestType1{},
 		TestType2{},
