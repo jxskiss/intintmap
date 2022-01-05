@@ -25,8 +25,8 @@ func TestTypeMap(t *testing.T) {
 		TestType12{},
 	}
 
-	var builder = func(x int) func() interface{} {
-		return func() interface{} { return x }
+	var builder = func(x int) func() (interface{}, error) {
+		return func() (interface{}, error) { return x, nil }
 	}
 
 	for _, val := range values1[:3] {

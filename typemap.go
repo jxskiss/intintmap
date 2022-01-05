@@ -28,6 +28,7 @@ type TypeMap struct {
 
 type dirtyEntry struct {
 	once sync.Once
+	err  error
 	val  atomic.Value // interface{}
 }
 
@@ -79,7 +80,7 @@ func (m *TypeMap) GetByUintptr(key uintptr) interface{} {
 //
 // This function will trigger a calibrating to move data from the slow path
 // to the fast path if needed.
-func (m *TypeMap) SetByType(key reflect.Type, f func() interface{}) interface{} {
+func (m *TypeMap) SetByType(key reflect.Type, f func() (interface{}, error)) (interface{}, error) {
 	// type iface { tab  *itab, data unsafe.Pointer }
 	typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
 	return m.SetByUintptr(typeptr, f)
@@ -94,17 +95,25 @@ func (m *TypeMap) SetByType(key reflect.Type, f func() interface{}) interface{} 
 //
 // This function will trigger a calibrating to move data from the slow path
 // to the fast path if needed.
-func (m *TypeMap) SetByUintptr(key uintptr, f func() interface{}) interface{} {
+func (m *TypeMap) SetByUintptr(key uintptr, f func() (interface{}, error)) (interface{}, error) {
 	x, _ := m.m2.LoadOrStore(key, &dirtyEntry{})
 	entry := x.(*dirtyEntry)
 	entry.once.Do(func() {
-		entry.val.Store(f())
+		val, err := f()
+		entry.err = err
+		if err == nil {
+			entry.val.Store(val)
+		}
 	})
+	err := entry.err
+	if err != nil {
+		return nil, err
+	}
 	val := entry.val.Load()
 	if atomic.AddUint32(&m.slowHit, 1) > slowHitThreshold {
 		m.calibrate(false)
 	}
-	return val
+	return val, nil
 }
 
 func (m *TypeMap) calibrate(wait bool) {
@@ -121,13 +130,18 @@ func (m *TypeMap) calibrate(wait bool) {
 		keys := make([]interface{}, 0)
 		m.m2.Range(func(key, value interface{}) bool {
 			if imap.Get(int64(key.(uintptr))) == nil {
-				if newMap == nil {
-					newMap = imap.Copy()
-				}
 				entry := value.(*dirtyEntry)
-				newMap.Set(int64(key.(uintptr)), entry.val.Load())
+				val := entry.val.Load()
+				if val != nil {
+					if newMap == nil {
+						newMap = imap.Copy()
+					}
+					newMap.Set(int64(key.(uintptr)), val)
+					keys = append(keys, key)
+				}
+			} else {
+				keys = append(keys, key)
 			}
-			keys = append(keys, key)
 			return true
 		})
 		if newMap != nil {
