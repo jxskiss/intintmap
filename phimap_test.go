@@ -1,11 +1,11 @@
-package typemap
+package phimap
 
 import "testing"
 
-func TestInterfaceMapSimple(t *testing.T) {
-	m := newInterfaceMap(10, 0.99)
-	var i int64
-	var v interface{}
+func TestPhiMapSimple(t *testing.T) {
+	m := NewPhiMap[any]()
+	var i uint64
+	var v any
 
 	// --------------------------------------------------------------------
 	// Set() and Get()
@@ -29,7 +29,7 @@ func TestInterfaceMapSimple(t *testing.T) {
 	// --------------------------------------------------------------------
 	// Keys()
 
-	m0 := make(map[int64]int64, 1000)
+	m0 := make(map[uint64]uint64, 1000)
 	for i = 1; i < 20001; i += 2 {
 		m0[i] = i
 	}
@@ -51,14 +51,14 @@ func TestInterfaceMapSimple(t *testing.T) {
 	// --------------------------------------------------------------------
 	// Items()
 
-	m0 = make(map[int64]int64, 1000)
+	m0 = make(map[uint64]uint64, 1000)
 	for i = 1; i < 20001; i += 2 {
 		m0[i] = i
 	}
 	n = len(m0)
 
 	for _, kv := range m.Items() {
-		m0[kv.K] = -(kv.V.(int64))
+		m0[kv.K] = -(kv.V.(uint64))
 		if kv.K != kv.V {
 			t.Errorf("didn't get expected key-value pair")
 		}

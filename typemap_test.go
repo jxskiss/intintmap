@@ -1,4 +1,4 @@
-package typemap
+package phimap
 
 import (
 	"reflect"
@@ -7,8 +7,8 @@ import (
 )
 
 func TestTypeMap(t *testing.T) {
-	m := New()
-	values1 := []interface{}{
+	m := NewTypeMap[int]()
+	values1 := []any{
 		TestType1{},
 		TestType2{},
 		TestType3{},
@@ -16,7 +16,7 @@ func TestTypeMap(t *testing.T) {
 		TestType5{},
 		TestType6{},
 	}
-	values2 := []interface{}{
+	values2 := []any{
 		TestType7{},
 		TestType8{},
 		TestType9{},
@@ -25,8 +25,8 @@ func TestTypeMap(t *testing.T) {
 		TestType12{},
 	}
 
-	var builder = func(x int) func() (interface{}, error) {
-		return func() (interface{}, error) { return x, nil }
+	var builder = func(x int) func() (int, error) {
+		return func() (int, error) { return x, nil }
 	}
 
 	for _, val := range values1[:3] {
@@ -47,8 +47,8 @@ func TestTypeMap(t *testing.T) {
 	}
 	for _, val := range values2 {
 		got := m.GetByType(reflect.TypeOf(val))
-		if got != nil {
-			t.Errorf("expected nil, got %v", got)
+		if got != 0 {
+			t.Errorf("expected zero, got %v", got)
 		}
 	}
 }

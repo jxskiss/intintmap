@@ -1,8 +1,15 @@
-package typemap
+package phimap
 
 import (
 	"math"
 	"unsafe"
+)
+
+const (
+	fillFactor = 0.6
+	initSize   = 32
+	u64Size    = unsafe.Sizeof(uint64(0))
+	entrySize  = u64Size + 2*unsafe.Sizeof(uintptr(0))
 )
 
 // INT_PHI is for scrambling the keys.
@@ -11,9 +18,9 @@ const INT_PHI = 0x9E3779B9
 // FREE_KEY is the 'free' key.
 const FREE_KEY = 0
 
-func phiMix(x int64) uint64 {
+func phiMix(x uint64) uint64 {
 	h := x * INT_PHI
-	return uint64(h ^ (h >> 16))
+	return h ^ (h >> 16)
 }
 
 func nextPowerOfTwo(x int) int {
@@ -44,18 +51,18 @@ func calcThreshold(capacity int, fillFactor float64) int {
 	return int(math.Floor(float64(capacity) * fillFactor))
 }
 
-// interfaceEntry represents a key value pair in a interfaceMap or TypeMap.
-type interfaceEntry struct {
-	K int64
-	V interface{}
+// Entry represents a key value pair in a PhiMap.
+type Entry struct {
+	K uint64
+	V any
 }
 
-func newInterfaceMap(size int, fillFactor float64) *interfaceMap {
-	capacity := arraySize(size, fillFactor)
+func NewPhiMap[T any]() *PhiMap[T] {
+	capacity := arraySize(initSize, fillFactor)
 	threshold := calcThreshold(capacity, fillFactor)
 	mask := capacity - 1
-	data := make([]interfaceEntry, capacity)
-	return &interfaceMap{
+	data := make([]Entry, capacity)
+	return &PhiMap[T]{
 		data:       data,
 		dptr:       unsafe.Pointer(&data[0]),
 		fillFactor: fillFactor,
@@ -65,8 +72,8 @@ func newInterfaceMap(size int, fillFactor float64) *interfaceMap {
 	}
 }
 
-type interfaceMap struct {
-	data []interfaceEntry
+type PhiMap[T any] struct {
+	data []Entry
 	dptr unsafe.Pointer
 
 	fillFactor float64
@@ -76,36 +83,36 @@ type interfaceMap struct {
 }
 
 // Size returns the size of the map.
-func (m *interfaceMap) Size() int {
+func (m *PhiMap[T]) Size() int {
 	return m.size
 }
 
 // getK helps to eliminate slice bounds checking
-func (m *interfaceMap) getK(ptr uint64) *int64 {
-	return (*int64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize))
+func (m *PhiMap[T]) getK(ptr uint64) *uint64 {
+	return (*uint64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize))
 }
 
 // getV helps to eliminate slice bounds checking
-func (m *interfaceMap) getV(ptr uint64) *interface{} {
-	return (*interface{})(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize + ptrsize))
+func (m *PhiMap[T]) getV(ptr uint64) *T {
+	return (*T)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize + u64Size))
 }
 
 // Get returns the value if the key is found, else it returns nil.
-// It will be inlined by the compiler.
-func (m *interfaceMap) Get(key int64) interface{} {
+// It will be inlined into the callers.
+func (m *PhiMap[T]) Get(key uint64) (value T) {
 	// manually inline phiMix to help inlining
-	h := uint64(key) * INT_PHI
+	h := key * INT_PHI
 	ptr := h ^ (h >> 16)
 
 	for {
 		ptr &= m.mask
 		// manually inline m.getK and m.getV
-		k := *(*int64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize))
+		k := *(*uint64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize))
 		if k == key {
-			return *(*interface{})(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize + ptrsize))
+			return *(*T)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize + u64Size))
 		}
 		if k == 0 {
-			return nil
+			return value
 		}
 		ptr += 1
 	}
@@ -113,7 +120,7 @@ func (m *interfaceMap) Get(key int64) interface{} {
 
 // Has tells whether a key is found in the map.
 // It will be inlined into the callers.
-func (m *interfaceMap) Has(key int64) bool {
+func (m *PhiMap[T]) Has(key uint64) bool {
 	// manually inline phiMix to help inlining
 	h := uint64(key) * INT_PHI
 	ptr := h ^ (h >> 16)
@@ -121,7 +128,7 @@ func (m *interfaceMap) Has(key int64) bool {
 	for {
 		ptr &= m.mask
 		// manually inline m.getK and m.getV
-		k := *(*int64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*3*ptrsize))
+		k := *(*uint64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize))
 		if k == key {
 			return true
 		}
@@ -132,8 +139,8 @@ func (m *interfaceMap) Has(key int64) bool {
 	}
 }
 
-// Set adds or updates key with value to the interfaceMap.
-func (m *interfaceMap) Set(key int64, val interface{}) {
+// Set adds or updates key with value to the PhiMap.
+func (m *PhiMap[T]) Set(key uint64, val T) {
 	ptr := phiMix(key)
 	for {
 		ptr &= m.mask
@@ -156,19 +163,18 @@ func (m *interfaceMap) Set(key int64, val interface{}) {
 	}
 }
 
-func (m *interfaceMap) rehash() {
+func (m *PhiMap[T]) rehash() {
 	newCapacity := len(m.data) * 2
 	m.threshold = calcThreshold(newCapacity, m.fillFactor)
 	m.mask = uint64(newCapacity - 1)
 
 	data := m.data
-	m.data = make([]interfaceEntry, newCapacity)
+	m.data = make([]Entry, newCapacity)
 	m.dptr = unsafe.Pointer(&m.data[0])
 	m.size = 0
 
-	var i int64
 COPY:
-	for i = 0; i < int64(len(data)); i++ {
+	for i := 0; i < len(data); i++ {
 		e := data[i]
 		if e.K == FREE_KEY {
 			continue
@@ -181,7 +187,7 @@ COPY:
 			k := *m.getK(ptr)
 			if k == FREE_KEY {
 				*m.getK(ptr) = e.K
-				*m.getV(ptr) = e.V
+				*m.getV(ptr) = e.V.(T)
 				m.size++
 				continue COPY
 			}
@@ -190,7 +196,7 @@ COPY:
 	}
 }
 
-func (m *interfaceMap) Delete(key int64) {
+func (m *PhiMap[T]) Delete(key uint64) {
 	ptr := phiMix(key)
 	for {
 		ptr &= m.mask
@@ -207,9 +213,9 @@ func (m *interfaceMap) Delete(key int64) {
 	}
 }
 
-func (m *interfaceMap) shiftKeys(pos uint64) uint64 {
-	var last, slot uint64
-	var k int64
+func (m *PhiMap[T]) shiftKeys(pos uint64) uint64 {
+	var zero T
+	var k, last, slot uint64
 	for {
 		last = pos
 		pos = last + 1
@@ -218,7 +224,7 @@ func (m *interfaceMap) shiftKeys(pos uint64) uint64 {
 			k = *m.getK(pos)
 			if k == FREE_KEY {
 				*m.getK(last) = FREE_KEY
-				*m.getV(last) = nil
+				*m.getV(last) = zero
 				return last
 			}
 
@@ -239,16 +245,16 @@ func (m *interfaceMap) shiftKeys(pos uint64) uint64 {
 	}
 }
 
-// Copy returns a copy of a interfaceMap, if the map's size triggers it's
+// Copy returns a copy of a PhiMap, if the map's size triggers it's
 // threshold, the new map's capacity will be twice of the old.
-func (m *interfaceMap) Copy() *interfaceMap {
+func (m *PhiMap[T]) Copy() *PhiMap[T] {
 	capacity := cap(m.data)
 	if m.size >= m.threshold {
 		capacity *= 2
 	}
 	mask := capacity - 1
-	data := make([]interfaceEntry, capacity)
-	newMap := &interfaceMap{
+	data := make([]Entry, capacity)
+	newMap := &PhiMap[T]{
 		data:       data,
 		dptr:       unsafe.Pointer(&data[0]),
 		fillFactor: m.fillFactor,
@@ -260,13 +266,13 @@ func (m *interfaceMap) Copy() *interfaceMap {
 		if e.K == FREE_KEY {
 			continue
 		}
-		newMap.Set(e.K, e.V)
+		newMap.Set(e.K, e.V.(T))
 	}
 	return newMap
 }
 
-func (m *interfaceMap) Keys() []int64 {
-	keys := make([]int64, 0, m.size+1)
+func (m *PhiMap[T]) Keys() []uint64 {
+	keys := make([]uint64, 0, m.size+1)
 	data := m.data
 	for i := 0; i < len(data); i++ {
 		if data[i].K == FREE_KEY {
@@ -277,8 +283,8 @@ func (m *interfaceMap) Keys() []int64 {
 	return keys
 }
 
-func (m *interfaceMap) Items() []interfaceEntry {
-	items := make([]interfaceEntry, 0, m.size+1)
+func (m *PhiMap[T]) Items() []Entry {
+	items := make([]Entry, 0, m.size+1)
 	data := m.data
 	for i := 0; i < len(data); i++ {
 		if data[i].K == FREE_KEY {

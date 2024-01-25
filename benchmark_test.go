@@ -1,4 +1,4 @@
-package typemap
+package phimap
 
 import (
 	"sync"
@@ -66,9 +66,9 @@ func Benchmark_Concurrent_Slice_Index(b *testing.B) {
 }
 
 func Benchmark_Concurrent_TypeMap_Get(b *testing.B) {
-	m := New()
+	m := NewTypeMap[uintptr]()
 	typPtrs := fillMap(func(k, v uintptr) {
-		m.SetByUintptr(k, func() (interface{}, error) { return v, nil })
+		m.SetByUintptr(k, func() (uintptr, error) { return v, nil })
 	})
 	m.calibrate(true)
 
@@ -83,7 +83,7 @@ func Benchmark_Concurrent_TypeMap_Get(b *testing.B) {
 }
 
 func fillMap(setfunc func(k, v uintptr)) []uintptr {
-	var values = []interface{}{
+	var values = []any{
 		TestType1{},
 		TestType2{},
 		TestType3{},

@@ -1,19 +1,23 @@
-# typemap
+# phimap
 
 [![GoDoc](https://img.shields.io/badge/api-Godoc-blue.svg)][godoc]
-[![Go Report Card](https://goreportcard.com/badge/github.com/jxskiss/typemap)][goreport]
-[![Issues](https://img.shields.io/github/issues/jxskiss/typemap.svg)][issues]
-[![GitHub release](http://img.shields.io/github/release/jxskiss/typemap.svg)][release]
+[![Go Report Card](https://goreportcard.com/badge/github.com/jxskiss/phimap)][goreport]
+[![Issues](https://img.shields.io/github/issues/jxskiss/phimap.svg)][issues]
+[![GitHub release](http://img.shields.io/github/release/jxskiss/phimap.svg)][release]
 [![MIT License](http://img.shields.io/badge/license-MIT-blue.svg)][license]
 
-[godoc]: https://pkg.go.dev/github.com/jxskiss/typemap
-[goreport]: https://goreportcard.com/report/github.com/jxskiss/typemap
-[issues]: https://github.com/jxskiss/typemap/issues
-[release]: https://github.com/jxskiss/typemap/releases
-[license]: https://github.com/jxskiss/typemap/blob/master/LICENSE
+[godoc]: https://pkg.go.dev/github.com/jxskiss/phimap
 
-Package typemap implements a fast concurrent safe map suitable to cache type related information.
-It uses copy-on-write algorithm, it's lock-free and achieves very high [performance](#performance)
+[goreport]: https://goreportcard.com/report/github.com/jxskiss/phimap
+
+[issues]: https://github.com/jxskiss/phimap/issues
+
+[release]: https://github.com/jxskiss/phimap/releases
+
+[license]: https://github.com/jxskiss/phimap/blob/master/LICENSE
+
+Package phimap implements a fast concurrent safe map suitable to cache information which use an integer as key.
+It uses copy-on-write algorithm, it is lock-free and achieves very high [performance](#performance)
 for concurrent reading operations.
 
 The open addressing linear probing hash table is forked from [intintmap](https://github.com/brentp/intintmap).
@@ -26,7 +30,7 @@ Related articles:
 ## Usage
 
 ```go
-typeCache := typemap.New()
+typeCache := phimap.NewTypeMap[SomeType]()
 
 typeCache.SetByType(reflect.TypeOf(someType{}), something) // or
 typeCache.SetByUintptr(uintptr(typePointer), something)
@@ -46,7 +50,7 @@ Benchmark_Concurrent_StdMap_Get_NoLock-12       79640444                13.70 ns
 Benchmark_Concurrent_StdMap_Get_RWMutex-12       2537535               473.0 ns/op
 Benchmark_Concurrent_SyncMap_Get-12             31426616                37.56 ns/op
 Benchmark_Concurrent_Slice_Index-12           1000000000                 0.6455 ns/op
-Benchmark_Concurrent_TypeMap_Get-12            415275356                 2.761 ns/op
+Benchmark_Concurrent_PhiMap_Get-12            415275356                 2.761 ns/op
 ```
 
 Some notes to tune performance:
