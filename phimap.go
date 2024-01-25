@@ -1,3 +1,18 @@
+// Package phimap implements a fast map suitable to cache information
+// which use an integer as key.
+//
+// `TypeMap` is a fast concurrent safe map base on `PhiMap` to cache
+// type-related information, it uses copy-on-write algorithm,
+// it is lock-free and achieves very high [performance](#performance)
+// for concurrent reading operations.
+//
+// The open addressing linear probing hash table is forked from [intintmap](https://github.com/brentp/intintmap).
+//
+// Related articles:
+//
+// [Implementing a world fastest Java int-to-int hash map](http://java-performance.info/implementing-world-fastest-java-int-to-int-hash-map/)
+//
+// [Fibonacci Hashing: The Optimization that the World Forgot (or: a Better Alternative to Integer Modulo)](https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/)
 package phimap
 
 import (
@@ -9,7 +24,7 @@ const (
 	fillFactor = 0.6
 	initSize   = 32
 	u64Size    = unsafe.Sizeof(uint64(0))
-	entrySize  = u64Size + 2*unsafe.Sizeof(uintptr(0))
+	entrySize  = unsafe.Sizeof(Entry{})
 )
 
 // INT_PHI is for scrambling the keys.
@@ -57,6 +72,7 @@ type Entry struct {
 	V any
 }
 
+// NewPhiMap creates a new PhiMap.
 func NewPhiMap[T any]() *PhiMap[T] {
 	capacity := arraySize(initSize, fillFactor)
 	threshold := calcThreshold(capacity, fillFactor)
@@ -72,6 +88,8 @@ func NewPhiMap[T any]() *PhiMap[T] {
 	}
 }
 
+// PhiMap is a fast hash table implementation which is suitable to
+// cache information that use integer keys.
 type PhiMap[T any] struct {
 	data []Entry
 	dptr unsafe.Pointer
@@ -93,12 +111,12 @@ func (m *PhiMap[T]) getK(ptr uint64) *uint64 {
 }
 
 // getV helps to eliminate slice bounds checking
-func (m *PhiMap[T]) getV(ptr uint64) *T {
-	return (*T)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize + u64Size))
+func (m *PhiMap[T]) getV(ptr uint64) *any {
+	return (*any)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize + u64Size))
 }
 
-// Get returns the value if the key is found, else it returns nil.
-// It will be inlined into the callers.
+// Get returns the value if the key is found, else it returns zero value of T.
+// It is optimized to be inline-able.
 func (m *PhiMap[T]) Get(key uint64) (value T) {
 	// manually inline phiMix to help inlining
 	h := key * INT_PHI
@@ -109,7 +127,7 @@ func (m *PhiMap[T]) Get(key uint64) (value T) {
 		// manually inline m.getK and m.getV
 		k := *(*uint64)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize))
 		if k == key {
-			return *(*T)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize + u64Size))
+			return (*(*any)(unsafe.Pointer(uintptr(m.dptr) + uintptr(ptr)*entrySize + u64Size))).(T)
 		}
 		if k == 0 {
 			return value
@@ -118,8 +136,8 @@ func (m *PhiMap[T]) Get(key uint64) (value T) {
 	}
 }
 
-// Has tells whether a key is found in the map.
-// It will be inlined into the callers.
+// Has tells whether a key exists in the map.
+// It is optimized to be inline-able.
 func (m *PhiMap[T]) Has(key uint64) bool {
 	// manually inline phiMix to help inlining
 	h := uint64(key) * INT_PHI
@@ -139,7 +157,7 @@ func (m *PhiMap[T]) Has(key uint64) bool {
 	}
 }
 
-// Set adds or updates key with value to the PhiMap.
+// Set adds or updates key with value to the map.
 func (m *PhiMap[T]) Set(key uint64, val T) {
 	ptr := phiMix(key)
 	for {
@@ -187,7 +205,7 @@ COPY:
 			k := *m.getK(ptr)
 			if k == FREE_KEY {
 				*m.getK(ptr) = e.K
-				*m.getV(ptr) = e.V.(T)
+				*m.getV(ptr) = e.V
 				m.size++
 				continue COPY
 			}
@@ -196,6 +214,7 @@ COPY:
 	}
 }
 
+// Delete deletes an element from the map.
 func (m *PhiMap[T]) Delete(key uint64) {
 	ptr := phiMix(key)
 	for {
@@ -245,7 +264,7 @@ func (m *PhiMap[T]) shiftKeys(pos uint64) uint64 {
 	}
 }
 
-// Copy returns a copy of a PhiMap, if the map's size triggers it's
+// Copy returns a copy of a PhiMap, if the map's size reaches the
 // threshold, the new map's capacity will be twice of the old.
 func (m *PhiMap[T]) Copy() *PhiMap[T] {
 	capacity := cap(m.data)
@@ -271,6 +290,7 @@ func (m *PhiMap[T]) Copy() *PhiMap[T] {
 	return newMap
 }
 
+// Keys returns all keys in the map, in no particular order.
 func (m *PhiMap[T]) Keys() []uint64 {
 	keys := make([]uint64, 0, m.size+1)
 	data := m.data
@@ -283,6 +303,7 @@ func (m *PhiMap[T]) Keys() []uint64 {
 	return keys
 }
 
+// Items returns all key value entries in the map, in no particular order.
 func (m *PhiMap[T]) Items() []Entry {
 	items := make([]Entry, 0, m.size+1)
 	data := m.data

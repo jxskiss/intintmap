@@ -9,7 +9,7 @@ import (
 
 const slowHitThreshold = 128
 
-// TypeMap provides a lockless copy-on-write map mainly to use for type
+// TypeMap is a lockless copy-on-write map designed for type
 // information cache, such as runtime generated encoders and decoders.
 //
 // TypeMap is safe to use concurrently, it grows as needed.
@@ -28,7 +28,7 @@ type dirtyEntry struct {
 	val  atomic.Value // any
 }
 
-// NewTypeMap returns a new TypeMap.
+// NewTypeMap creates a new TypeMap.
 func NewTypeMap[T any]() *TypeMap[T] {
 	imap := NewPhiMap[T]()
 	return &TypeMap[T]{m: unsafe.Pointer(imap)}
@@ -40,29 +40,31 @@ func (m *TypeMap[T]) Size() int {
 }
 
 // GetByType returns value for the given reflect.Type.
-// If key is not found in the map, it returns nil.
+// If key is not found in the map, it returns zero value of T.
 //
-// This is the fast path, it will be inlined into the caller.
+// This is the fast path, it is optimized to be inline-able.
 func (m *TypeMap[T]) GetByType(key reflect.Type) T {
 
 	// type iface { tab  *itab, data unsafe.Pointer }
 
-	//typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
-	//imap := (*PhiMap)(atomic.LoadPointer(&m.m))
-	//return imap.Get(int64(typeptr))
-
-	return (*PhiMap[T])(atomic.LoadPointer(&m.m)).Get(uint64((*(*[2]uintptr)(unsafe.Pointer(&key)))[1]))
+	/*
+		typeptr := (*(*[2]uintptr)(unsafe.Pointer(&key)))[1]
+		imap := (*PhiMap)(atomic.LoadPointer(&m.m))
+		return imap.Get(uint64(typeptr))
+	*/
+	return (*PhiMap[T])(atomic.LoadPointer(&m.m)).
+		Get(uint64((*(*[2]uintptr)(unsafe.Pointer(&key)))[1]))
 }
 
 // GetByUintptr returns value for the given uintptr key.
-// If key is not found in the map, it returns nil.
+// If key is not found in the map, it returns zero value of T.
 //
-// This is the fast path, it will be inlined into the caller.
+// This is the fast path, it is optimized to be inline-able.
 func (m *TypeMap[T]) GetByUintptr(key uintptr) T {
-
-	//imap := (*PhiMap)(atomic.LoadPointer(&m.m))
-	//return imap.Get(int64(key))
-
+	/*
+		imap := (*PhiMap)(atomic.LoadPointer(&m.m))
+		return imap.Get(uint64(key))
+	*/
 	return (*PhiMap[T])(atomic.LoadPointer(&m.m)).Get(uint64(key))
 }
 
@@ -71,9 +73,9 @@ func (m *TypeMap[T]) GetByUintptr(key uintptr) T {
 // by calling f, it then caches and returns the value.
 //
 // By accepting a function instead of a pre-built value, it guarantees that
-// f will be called exactly once, which may be expensive.
+// f is called exactly once to avoid unnecessary cost, which may be expensive.
 //
-// This function will trigger a calibrating to move data from the slow path
+// This function triggers a calibrating to move data from the slow path
 // to the fast path if needed.
 func (m *TypeMap[T]) SetByType(key reflect.Type, f func() (T, error)) (T, error) {
 	// type iface { tab  *itab, data unsafe.Pointer }
@@ -86,30 +88,39 @@ func (m *TypeMap[T]) SetByType(key reflect.Type, f func() (T, error)) (T, error)
 // by calling f, it then caches and returns the value.
 //
 // By accepting a function instead of a pre-built value, it guarantees that
-// f will be called exactly once, which may be expensive.
+// f is called exactly once to avoid unnecessary cost, which may be expensive.
 //
-// This function will trigger a calibrating to move data from the slow path
+// This function triggers a calibrating to move data from the slow path
 // to the fast path if needed.
 func (m *TypeMap[T]) SetByUintptr(key uintptr, f func() (T, error)) (T, error) {
 	var zero T
 	x, _ := m.m2.LoadOrStore(uint64(key), &dirtyEntry{})
+	called := false
 	entry := x.(*dirtyEntry)
 	entry.once.Do(func() {
+		called = true
 		val, err := f()
 		entry.err = err
 		if err == nil {
 			entry.val.Store(val)
 		}
 	})
-	err := entry.err
-	if err != nil {
-		return zero, err
+	val := entry.val.Load()
+	if val == nil { // error occurred
+		if called {
+			return zero, entry.err
+		}
+		val1, err1 := f() // retry calling f
+		if err1 != nil {
+			return zero, err1
+		}
+		entry.val.Store(val1)
+		val = val1
 	}
-	val := entry.val.Load().(T)
 	if atomic.AddUint32(&m.slowHit, 1) > slowHitThreshold {
 		m.calibrate(false)
 	}
-	return val, nil
+	return val.(T), nil
 }
 
 func (m *TypeMap[T]) calibrate(wait bool) {
@@ -120,31 +131,30 @@ func (m *TypeMap[T]) calibrate(wait bool) {
 	atomic.StoreUint32(&m.slowHit, 0)
 	done := make(chan struct{})
 
-	var zero T
 	go func() {
 		var newMap *PhiMap[T]
 		imap := (*PhiMap[T])(atomic.LoadPointer(&m.m))
-		keys := make([]any, 0)
+		delKeys := make([]any, 0)
 		m.m2.Range(func(key, value any) bool {
-			if any(imap.Get(key.(uint64))) == any(zero) {
-				entry := value.(*dirtyEntry)
-				val := entry.val.Load()
-				if val != nil {
-					if newMap == nil {
-						newMap = imap.Copy()
-					}
-					newMap.Set(key.(uint64), val.(T))
-					keys = append(keys, key)
+			if imap.Has(key.(uint64)) {
+				delKeys = append(delKeys, key)
+				return true
+			}
+			entry := value.(*dirtyEntry)
+			val := entry.val.Load()
+			if val != nil {
+				if newMap == nil {
+					newMap = imap.Copy()
 				}
-			} else {
-				keys = append(keys, key)
+				newMap.Set(key.(uint64), val.(T))
+				delKeys = append(delKeys, key)
 			}
 			return true
 		})
 		if newMap != nil {
 			atomic.StorePointer(&m.m, unsafe.Pointer(newMap))
 		}
-		for _, k := range keys {
+		for _, k := range delKeys {
 			m.m2.Delete(k)
 		}
 		atomic.StoreUint32(&m.lock, 0)

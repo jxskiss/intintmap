@@ -16,8 +16,10 @@
 
 [license]: https://github.com/jxskiss/phimap/blob/master/LICENSE
 
-Package phimap implements a fast concurrent safe map suitable to cache information which use an integer as key.
-It uses copy-on-write algorithm, it is lock-free and achieves very high [performance](#performance)
+Package phimap implements a fast map suitable to cache information which use an integer as key.
+
+`TypeMap` is a fast concurrent safe map base on `PhiMap` to cache type-related information,
+it uses copy-on-write algorithm, it is lock-free and achieves very high [performance](#performance)
 for concurrent reading operations.
 
 The open addressing linear probing hash table is forked from [intintmap](https://github.com/brentp/intintmap).
@@ -50,7 +52,7 @@ Benchmark_Concurrent_StdMap_Get_NoLock-12       79640444                13.70 ns
 Benchmark_Concurrent_StdMap_Get_RWMutex-12       2537535               473.0 ns/op
 Benchmark_Concurrent_SyncMap_Get-12             31426616                37.56 ns/op
 Benchmark_Concurrent_Slice_Index-12           1000000000                 0.6455 ns/op
-Benchmark_Concurrent_PhiMap_Get-12            415275356                 2.761 ns/op
+Benchmark_Concurrent_TypeMap_Get-12            415275356                 2.761 ns/op
 ```
 
 Some notes to tune performance:

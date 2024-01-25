@@ -1,6 +1,10 @@
 package phimap
 
-import "testing"
+import (
+	"context"
+	"strconv"
+	"testing"
+)
 
 func TestPhiMapSimple(t *testing.T) {
 	m := NewPhiMap[any]()
@@ -118,5 +122,89 @@ func TestPhiMapSimple(t *testing.T) {
 		if v = m.Get(i + 1); v != nil {
 			t.Errorf("didn't get expected 'not found' flag")
 		}
+	}
+}
+
+type AStruct struct {
+	A int64
+	B string
+	C func(ctx context.Context) (int64, error)
+	D []byte
+	E int
+	F [32]int64
+}
+
+func TestPhiMap_Types(t *testing.T) {
+	testData := make([]*AStruct, initSize)
+	for i := 0; i < initSize; i++ {
+		x := i
+		obj := &AStruct{
+			A: int64(x),
+			B: strconv.Itoa(x),
+			C: func(ctx context.Context) (int64, error) {
+				return int64(x), nil
+			},
+			D: []byte(strconv.Itoa(x)),
+			E: x,
+		}
+		for j := 0; j < len(obj.F); j++ {
+			obj.F[j] = int64(x)
+		}
+		testData[x] = obj
+	}
+
+	t.Run("pointer", func(t *testing.T) {
+		m := NewPhiMap[*AStruct]()
+		for i := 0; i < initSize; i++ {
+			m.Set(uint64(i), testData[i])
+			for j := 0; j < i; j++ {
+				got := m.Get(uint64(j))
+				assertEqual(t, int64(j), got.A)
+				assertEqual(t, strconv.Itoa(j), got.B)
+				cRet, err := got.C(context.Background())
+				if err != nil {
+					t.Errorf("got unexpected error: %v", err)
+				}
+				assertEqual(t, int64(j), cRet)
+				assertEqual(t, strconv.Itoa(j), string(got.D))
+				assertEqual(t, j, got.E)
+				assertEqual(t, 32, len(got.F))
+				for k := 0; k < len(got.F); k++ {
+					assertEqual(t, int64(j), got.F[k])
+				}
+			}
+		}
+	})
+
+	t.Run("struct", func(t *testing.T) {
+		m := NewPhiMap[AStruct]()
+		for i := 0; i < initSize; i++ {
+			m.Set(uint64(i), *testData[i])
+			for j := 0; j < i; j++ {
+				for j := 0; j < i; j++ {
+					got := m.Get(uint64(j))
+					assertEqual(t, int64(j), got.A)
+					assertEqual(t, strconv.Itoa(j), got.B)
+					cRet, err := got.C(context.Background())
+					if err != nil {
+						t.Errorf("got unexpected error: %v", err)
+					}
+					assertEqual(t, int64(j), cRet)
+					assertEqual(t, strconv.Itoa(j), string(got.D))
+					assertEqual(t, j, got.E)
+					assertEqual(t, 32, len(got.F))
+					for k := 0; k < len(got.F); k++ {
+						assertEqual(t, int64(j), got.F[k])
+					}
+				}
+			}
+		}
+	})
+}
+
+func assertEqual[T comparable](t *testing.T, left, right T) {
+	t.Helper()
+	if left != right {
+		t.Errorf("values not equal, left= %v, right= %v", left, right)
 	}
 }
